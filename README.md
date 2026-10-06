@@ -10,8 +10,11 @@ Entre deux clés Maya interpole, ce qui donne le crossfade de coarticulation.
 
 ## Installation
 
-1. Copie le dossier `maya_auto_lipsync` dans ton dossier de scripts Maya
-   (`Documents/maya/scripts` ou `Documents/maya/<version>/scripts`).
+1. Télécharge le repo (bouton `Code` → `Download ZIP` sur GitHub) et dézippe-le
+   n'importe où. Glisse `drag_install.py` dans le viewport de Maya : le dossier
+   est copié dans tes scripts Maya et un bouton `Lipsync` apparaît sur la shelf.
+   À la main sinon : copie le dossier `maya_auto_lipsync` dans
+   `Documents/maya/scripts` (ou `Documents/maya/<version>/scripts`).
 2. Installe [Rhubarb Lip Sync](https://github.com/DanielSWolf/rhubarb-lip-sync/releases)
    (un zip, pas d'install). Note le chemin de l'exécutable `rhubarb` / `rhubarb.exe`.
 3. Dans Maya (Script Editor, onglet Python) :
