@@ -265,8 +265,42 @@ def load_cues(json_path):
         data = json.load(f)
     cues = []
     for c in data.get("mouthCues", []):
-        cues.append({"start": float(c["start"]), "end": float(c["end"]), "value": str(c["value"])})
+        cue = {"start": float(c["start"]), "end": float(c["end"]), "value": str(c["value"])}
+        if c.get("viseme"):
+            cue["viseme"] = str(c["viseme"])
+            cue["kind"] = str(c.get("kind", "consonant"))
+        cues.append(cue)
     return cues
+
+
+def wav2vec_script():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "phonemes_wav2vec.py")
+
+
+def run_wav2vec(python_exe, audio_path, dialog_text=None, lang="fr-fr", out_json=None):
+    """Lance phonemes_wav2vec.py dans un Python externe (torch + transformers) et renvoie les cues."""
+    if not python_exe or not os.path.isfile(python_exe):
+        raise IOError("Python externe introuvable : %r" % python_exe)
+    if not os.path.isfile(audio_path):
+        raise IOError("Fichier audio introuvable : %r" % audio_path)
+    if out_json is None:
+        out_json = os.path.join(tempfile.gettempdir(), "auto_lipsync_cues.json")
+    cmd = [python_exe, wav2vec_script(), audio_path, "-o", out_json, "--lang", lang]
+    dialog_file = None
+    if dialog_text and dialog_text.strip():
+        fd, dialog_file = tempfile.mkstemp(suffix=".txt", prefix="auto_lipsync_dialog_")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(dialog_text.strip())
+        cmd += ["--text-file", dialog_file]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _, err = proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError("Moteur wav2vec2 en erreur (%d) :\n%s" % (proc.returncode, err.decode("utf-8", "replace")))
+    finally:
+        if dialog_file and os.path.exists(dialog_file):
+            os.remove(dialog_file)
+    return load_cues(out_json)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +390,7 @@ class Settings(object):
         self.hold_min_frames = 6.0      # au dela, on pose 2 cles pour tenir la forme
         self.hold_margin = 2.0          # marge (frames) entre le bord du phoneme et la cle de tenue
         self.loud_threshold = 0.7       # energie a partir de laquelle D devient D_loud
+        self.loud_upgrade = {"A": "Ah"} # moteur phonemes : viseme -> viseme quand l'audio est fort
         self.mapping = dict(DEFAULT_MAPPING)
         self.target_weights = dict(TARGET_WEIGHTS)
         for k, v in kw.items():
@@ -364,14 +399,37 @@ class Settings(object):
             setattr(self, k, v)
 
 
+def cue_kind(cue):
+    """Classe visuelle d'un cue : open, round, consonant, closure ou rest."""
+    if "kind" in cue:
+        return cue["kind"]
+    shape = cue["value"]
+    if shape in ROUND_SHAPES:
+        return "round"
+    if shape in OPEN_SHAPES:
+        return "open"
+    if shape == "A":
+        return "closure"
+    if shape == "X":
+        return "rest"
+    return "consonant"
+
+
+def cue_base(cue, settings):
+    """Viseme de base (sans variante) d'un cue, ou None s'il n'est pas mappe."""
+    if "viseme" in cue:
+        return cue["viseme"]
+    return settings.mapping.get(cue["value"])
+
+
 def resolve_variant(cues, index):
     """(a) ou (o) selon la voyelle voisine. On regarde d'abord la suivante (anticipation)."""
     for j in (index + 1, index + 2, index - 1, index - 2):
         if 0 <= j < len(cues):
-            shape = cues[j]["value"]
-            if shape in ROUND_SHAPES:
+            kind = cue_kind(cues[j])
+            if kind == "round":
                 return "o"
-            if shape in OPEN_SHAPES:
+            if kind == "open":
                 return "a"
     return "a"
 
@@ -393,11 +451,16 @@ def plan_keys(cues, settings, energy=None, available=None):
     keys = {}
     for i, cue in enumerate(cues):
         shape = cue["value"]
-        base = s.mapping.get(shape)
+        base = cue_base(cue, s)
         if base is None:
             continue
+        # rhubarb : B sert a la variante (a)/(o) mais n'est pas une voyelle pour le volume
+        is_vowel = cue_kind(cue) in ("open", "round") if "viseme" in cue else shape in VOWEL_SHAPES
         e = energy_for_interval(energy, cue["start"], cue["end"]) if energy else 0.5
-        if shape == "D" and e >= s.loud_threshold and s.mapping.get("D_loud"):
+        if "viseme" in cue:
+            if base in s.loud_upgrade and e >= s.loud_threshold and (available is None or s.loud_upgrade[base] in available):
+                base = s.loud_upgrade[base]
+        elif shape == "D" and e >= s.loud_threshold and s.mapping.get("D_loud"):
             base = s.mapping["D_loud"]
         viseme = _viseme_with_variant(base, resolve_variant(cues, i))
         if available is not None and viseme not in available and viseme != "Neutral":
@@ -414,7 +477,7 @@ def plan_keys(cues, settings, energy=None, available=None):
             weight = target
         else:
             dur_factor = min(1.0, max(s.min_duration_factor, dur_frames / s.full_frames))
-            if shape in VOWEL_SHAPES:
+            if is_vowel:
                 energy_factor = (1.0 - s.energy_influence) + s.energy_influence * (0.5 + 0.6 * e)
             else:
                 energy_factor = 1.0

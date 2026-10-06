@@ -38,6 +38,8 @@ class LipsyncUI(object):
         data = {
             "happy": self.val("happy"), "sad": self.val("sad"), "rhubarb": self.val("rhubarb"),
             "namespace": self.val("namespace"), "recognizer": self.val("recognizer"),
+            "engine": cmds.optionMenuGrp(self.w["engine"], q=True, value=True),
+            "python": self.val("python"), "lang": self.val("lang"),
             "mapping": self.mapping(),
         }
         try:
@@ -72,14 +74,24 @@ class LipsyncUI(object):
         self.w["dialog"] = cmds.scrollField(height=60, wordWrap=True)
         cmds.setParent("..")
 
-        cmds.frameLayout(label="Rhubarb Lip Sync", collapsable=True, marginWidth=4, marginHeight=4)
+        cmds.frameLayout(label="Moteur de phonemes", collapsable=True, marginWidth=4, marginHeight=4)
+        self.w["engine"] = cmds.optionMenuGrp(label="Moteur", columnWidth2=(130, 250),
+                                              ann="wav2vec2 = vrais phonemes, multilingue, utilise toute la charte")
+        for eng in ("wav2vec2 (recommande)", "rhubarb"):
+            cmds.menuItem(label=eng)
+        cmds.optionMenuGrp(self.w["engine"], e=True, value=self.prefs.get("engine", "wav2vec2 (recommande)"))
+        cmds.text(label="wav2vec2 : Python externe avec torch + transformers (voir README)", align="left")
+        self._path_row("python", "Executable python", self.prefs.get("python", ""), folder=False, filt="*")
+        self.w["lang"] = cmds.textFieldGrp(label="Langue (avec texte)", text=self.prefs.get("lang", "fr-fr"),
+                                           columnWidth2=(130, 100), ann="code espeak : fr-fr, en-us, en-gb...")
+        cmds.text(label="rhubarb :", align="left")
         self._path_row("rhubarb", "Executable rhubarb", self.prefs.get("rhubarb", ""), folder=False, filt="*")
         self.w["recognizer"] = cmds.optionMenuGrp(label="Recognizer", columnWidth2=(130, 150),
                                                   ann="phonetic = toutes langues (francais), pocketSphinx = anglais")
         for r in ("phonetic", "pocketSphinx"):
             cmds.menuItem(label=r)
         cmds.optionMenuGrp(self.w["recognizer"], e=True, value=self.prefs.get("recognizer", "phonetic"))
-        self._path_row("cues", "Ou JSON Rhubarb existant", "", folder=False, filt="JSON (*.json)")
+        self._path_row("cues", "Ou JSON deja calcule", "", folder=False, filt="JSON (*.json)")
         cmds.setParent("..")
 
         cmds.frameLayout(label="Blending", collapsable=True, marginWidth=4, marginHeight=4)
@@ -101,7 +113,8 @@ class LipsyncUI(object):
             cmds.menuItem(label=t)
         cmds.setParent("..")
 
-        cmds.frameLayout(label="Mapping Rhubarb -> charte", collapsable=True, collapse=True, marginWidth=4, marginHeight=4)
+        cmds.frameLayout(label="Mapping Rhubarb -> charte (moteur rhubarb seulement)", collapsable=True, collapse=True,
+                         marginWidth=4, marginHeight=4)
         saved = self.prefs.get("mapping", {})
         for shape in RHUBARB_SHAPES:
             default = saved.get(shape, core.DEFAULT_MAPPING.get(shape)) or "(aucun)"
@@ -208,6 +221,9 @@ class LipsyncUI(object):
             cues_json=cues,
             dialog_text=dialog,
             recognizer=self.val("recognizer"),
+            engine="wav2vec2" if cmds.optionMenuGrp(self.w["engine"], q=True, value=True).startswith("wav2vec2") else "rhubarb",
+            python_exe=self.val("python") or None,
+            lang=self.val("lang") or "fr-fr",
             start_frame=cmds.floatFieldGrp(self.w["start"], q=True, value1=True),
             emotion=cmds.floatSliderGrp(self.w["emotion"], q=True, value=True),
             emotion_attr=self.val("emotion_attr") or None,

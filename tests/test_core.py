@@ -221,5 +221,77 @@ class CuesTest(unittest.TestCase):
             core.run_rhubarb("/nope/rhubarb", "/nope.wav")
 
 
+from maya_auto_lipsync import phonemes_wav2vec as w2v  # noqa: E402
+
+
+class Wav2VecMappingTest(unittest.TestCase):
+    def test_ipa_mapping(self):
+        cases = {
+            "p": ("MBP", "closure"), "m": ("MBP", "closure"), "f": ("VF", "consonant"),
+            "ʃ": ("Ch", "consonant"), "s": ("SZTDN", "consonant"), "ʁ": ("SZTDN", "consonant"),
+            "a": ("A", "open"), "ɑ̃": ("Ah", "open"), "ɛ̃": ("E", "open"), "iː": ("i", "open"),
+            "ˈa": ("A", "open"), "ɔ̃": ("OoEn", "round"), "u": ("OuUOn", "round"), "w": ("OuUOn", "round"),
+            "aɪ": ("Ai", "open"), "|": ("Neutral", "rest"), "h": (None, None), "<pad>": (None, None),
+        }
+        for ipa, expected in cases.items():
+            self.assertEqual(w2v.ipa_to_viseme(ipa), expected, ipa)
+
+    def test_segments_to_cues(self):
+        # "bonjour" : b ɔ̃ ʒ u ʁ, avec un silence avant et un trou de blanks CTC entre phones
+        segs = [(0.30, 0.32, "b"), (0.34, 0.36, "ɔ̃"), (0.48, 0.50, "ʒ"), (0.52, 0.54, "u"), (0.60, 0.62, "ʁ"),
+                (0.90, 0.92, "h")]
+        cues = w2v.segments_to_cues(segs, duration=1.2)
+        self.assertEqual(cues[0]["viseme"], "Neutral")                 # silence initial
+        self.assertEqual([c["viseme"] for c in cues], ["Neutral", "MBP", "OoEn", "Ch", "OuUOn", "SZTDN", "Neutral"])
+        # chaque phone dure jusqu'au suivant quand le trou est petit
+        self.assertAlmostEqual(cues[1]["end"], 0.34)
+        self.assertAlmostEqual(cues[2]["end"], 0.48)
+        # le dernier phone ne s'etire pas jusqu'au 'h' ignore (trou de 0.28 > max_gap)
+        self.assertAlmostEqual(cues[5]["end"], 0.62)
+        self.assertAlmostEqual(cues[6]["start"], 0.62)
+        self.assertAlmostEqual(cues[6]["end"], 1.2)
+        for a, b in zip(cues, cues[1:]):
+            self.assertLessEqual(a["end"], b["start"] + 1e-9)
+
+
+class PhonemePlanTest(unittest.TestCase):
+    def setUp(self):
+        segs = [(0.10, 0.12, "p"), (0.14, 0.16, "a"), (0.30, 0.32, "s"), (0.34, 0.36, "ɔ̃"), (0.50, 0.52, "m"),
+                (0.54, 0.56, "u"), (0.70, 0.72, "ʃ"), (0.74, 0.76, "aɪ")]
+        self.cues = w2v.segments_to_cues(segs, duration=1.0)
+
+    def test_variants_and_visemes_from_kind(self):
+        s = core.Settings(fps=24.0, energy_influence=0.0)
+        plan = core.plan_keys(self.cues, s)
+        by_value = {k["shape"]: k for k in plan}
+        self.assertEqual(by_value["p"]["viseme"], "MBP_a")      # voyelle suivante 'a'
+        self.assertEqual(by_value["s"]["viseme"], "SZTDN_o")    # voyelle suivante 'ɔ̃'
+        self.assertEqual(by_value["m"]["viseme"], "MBP_o")      # voyelle suivante 'u'
+        self.assertEqual(by_value["ʃ"]["viseme"], "Ch")
+        self.assertEqual(by_value["aɪ"]["viseme"], "Ai")
+        self.assertAlmostEqual(by_value["p"]["weight"], 1.0)
+        self.assertLess(by_value["a"]["weight"], 1.0)
+
+    def test_loud_upgrade_and_roundtrip_json(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "cues.json")
+        with open(path, "w") as f:
+            json.dump({"mouthCues": self.cues}, f)
+        loaded = core.load_cues(path)
+        self.assertEqual(loaded[1]["viseme"], "MBP")
+        loud = [(t / 100.0, 1.0) for t in range(100)]
+        plan = core.plan_keys(loaded, core.Settings(fps=24.0, energy_influence=1.0), loud,
+                              available={"A", "Ah", "MBP_a", "MBP_o", "SZTDN_o", "OoEn", "OuUOn", "Ch", "Ai", "Neutral"})
+        self.assertIn("Ah", [k["viseme"] for k in plan])
+        plan = core.plan_keys(loaded, core.Settings(fps=24.0, energy_influence=1.0), loud,
+                              available={"A", "MBP_a", "Neutral"})
+        self.assertNotIn("Ah", [k["viseme"] for k in plan])  # Ah absent de la library -> reste A
+        self.assertIn("A", [k["viseme"] for k in plan])
+
+    def test_missing_python(self):
+        with self.assertRaises(IOError):
+            core.run_wav2vec("/nope/python", "/nope.wav")
+
+
 if __name__ == "__main__":
     unittest.main()

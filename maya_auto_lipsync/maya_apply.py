@@ -161,9 +161,13 @@ def apply_plan(library, plan, emotion=1.0, emotion_attr=None, namespace=None,
 
 def run(audio=None, happy_folder=None, sad_folder=None, rhubarb_exe=None,
         cues_json=None, dialog_text=None, recognizer="phonetic",
+        engine="rhubarb", python_exe=None, lang="fr-fr",
         start_frame=None, emotion=1.0, emotion_attr=None, namespace=None,
         import_sound=True, tangent="auto", **settings_kw):
-    """Point d'entree sans UI. Renvoie (plan, nkeys, missing)."""
+    """Point d'entree sans UI. Renvoie (plan, nkeys, missing).
+
+    engine : "rhubarb" (rhubarb_exe) ou "wav2vec2" (python_exe = Python externe avec torch).
+    """
     library = core.PoseLibrary(happy_folder, sad_folder)
 
     offset = 0.0
@@ -176,6 +180,8 @@ def run(audio=None, happy_folder=None, sad_folder=None, rhubarb_exe=None,
 
     if cues_json:
         cues = core.load_cues(cues_json)
+    elif engine == "wav2vec2":
+        cues = core.run_wav2vec(python_exe, audio, dialog_text, lang)
     else:
         cues = core.run_rhubarb(rhubarb_exe, audio, dialog_text, recognizer)
     energy = core.audio_energy(audio)
